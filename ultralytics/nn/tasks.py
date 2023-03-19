@@ -3,6 +3,7 @@
 import contextlib
 from copy import deepcopy
 from pathlib import Path
+from collections import OrderedDict
 
 import thop
 import torch
@@ -239,6 +240,111 @@ class DetectionModel(BaseModel):
         return y
 
 
+class CNSDetectionModel(DetectionModel):
+    # YOLOv8 detection model, adapted for PoET
+    def __init__(self, return_interim_layers:bool = True, cfg='yolov8n.yaml', ch=3, nc=None, verbose=True):  # model, input channels, number of classes
+        super().__init__(cfg, ch, nc, verbose)
+        self.return_interim_layers = return_interim_layers
+        print(f'{self.return_interim_layers=}')
+        print(f'{self.model[-1]=}')
+        print(f'{dir(self.model[-1])=}')
+
+        if self.return_interim_layers:
+            self.return_layers = {name: child for name, child in [*self.model[-1].named_children(), ('Detect', self.model[-1])]}       # inputs of detection layer, plus itself
+            self.num_channels = [self.model[layer][3] for layer in self.return_layers.values()]  # output channels of each layer
+            # FIXME this is almost certainly not correct, this value is 'repeats'
+            # But idk how to calculate the strides 
+            self.strides = [self.model[layer][1] for layer in self.return_layers.values()]       # stride of each layer
+        else:
+            self.return_layers = {"0": self.model[-1]}      # detection layer
+            self.num_channels = self.model[-1][3]           # output channels of detction layer
+            self.strides = self.model[-1].stride                      # stride of detection layer
+
+        self.conf_thres = args.backbone_conf_thresh
+        self.iou_thres = args.backbone_iou_thresh
+        self.agnostic_nms = args.backbone_agnostic_nms
+
+    def _forward_once(self, x, profile=False, visualize=False):
+        """
+        Perform a forward pass through the network.
+
+        Args:
+            x (torch.Tensor): The input tensor to the model
+            profile (bool):  Print the computation time of each layer if True, defaults to False.
+            visualize (bool): Save the feature maps of the model if True, defaults to False
+
+        Returns:
+            (torch.Tensor): The last output of the model.
+        """
+        print(f'{dir(self)=}')
+        y, dt = [], []  # outputs
+        intermediate = OrderedDict()
+        intermediate_i = 0
+        for i, m in enumerate(self.model):
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+            if profile:
+                self._profile_one_layer(m, x, dt)
+            x = m(x)  # run
+            y.append(x if m.i in self.save else None)  # save output
+            if visualize:
+                LOGGER.info('visualize feature not yet supported')
+                # TODO: feature_visualization(x, m.type, m.i, save_dir=visualize)
+            try:
+                if m in self.return_layers.values():
+                    intermediate[str(intermediate_i)] = x
+                    intermediate_i += 1
+            except:
+                print('Return Layers not found!\nThis is not an error if we\'re still in the super().__init__')
+
+        if len(intermediate) == 0:
+            return x
+        return x, intermediate 
+
+
+    def forward(self, x, augment=False, profile=False, visualize=False):
+        if augment:
+            raise NotImplemented
+            return self._forward_augment(x)
+        return self._forward_once(x, profile, visualize)  # single-scale inference, train
+
+    def _forward_augment(self, x):
+        img_size = x.shape[-2:]  # height, width
+        s = [1, 0.83, 0.67]  # scales
+        f = [None, 3, None]  # flips (2-ud, 3-lr)
+        y = []  # outputs
+        for si, fi in zip(s, f):
+            xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
+            yi = self._forward_once(xi)[0]  # forward
+            # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
+            yi = self._descale_pred(yi, fi, si, img_size)
+            y.append(yi)
+        y = self._clip_augmented(y)  # clip augmented tails
+        return torch.cat(y, -1), None  # augmented inference, train
+
+    @staticmethod
+    def _descale_pred(p, flips, scale, img_size, dim=1):
+        # de-scale predictions following augmented inference (inverse operation)
+        p[:, :4] /= scale  # de-scale
+        x, y, wh, cls = p.split((1, 1, 2, p.shape[dim] - 4), dim)
+        if flips == 2:
+            y = img_size[0] - y  # de-flip ud
+        elif flips == 3:
+            x = img_size[1] - x  # de-flip lr
+        return torch.cat((x, y, wh, cls), dim)
+
+    def _clip_augmented(self, y):
+        # Clip YOLOv5 augmented inference tails
+        nl = self.model[-1].nl  # number of detection layers (P3-P5)
+        g = sum(4 ** x for x in range(nl))  # grid points
+        e = 1  # exclude layer count
+        i = (y[0].shape[-1] // g) * sum(4 ** x for x in range(e))  # indices
+        y[0] = y[0][..., :-i]  # large
+        i = (y[-1].shape[-1] // g) * sum(4 ** (nl - 1 - x) for x in range(e))  # indices
+        y[-1] = y[-1][..., i:]  # small
+        return y
+
+
 class SegmentationModel(DetectionModel):
     # YOLOv8 segmentation model
     def __init__(self, cfg='yolov8n-seg.yaml', ch=3, nc=None, verbose=True):
@@ -390,16 +496,25 @@ def attempt_load_weights(weights, device=None, inplace=True, fuse=False):
     return ensemble
 
 
-def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False):
+def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False, task=None, return_interim_layers=None):
     # Loads a single model weights
     ckpt, weight = torch_safe_load(weight)  # load ckpt
     args = {**DEFAULT_CFG_DICT, **ckpt['train_args']}  # combine model and default args, preferring model args
+    args['task'] = task or args['task']
+    print(f'{args=}')
     model = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model
+    print(f'{model=}')
+    print(f'{type(model)=}')
+    print(f'{ckpt.keys()=}')
+    if task == 'cns_detect':
+        model = CNSDetectionModel(return_interim_layers=return_interim_layers)
+        model.load_state_dict(ckpt['model'].state_dict())
+        model = model.to(device).float()
 
     # Model compatibility updates
     model.args = {k: v for k, v in args.items() if k in DEFAULT_CFG_KEYS}  # attach args to model
     model.pt_path = weight  # attach *.pt file path to model
-    model.task = guess_model_task(model)
+    model.task = task or guess_model_task(model)
     if not hasattr(model, 'stride'):
         model.stride = torch.tensor([32.])
 

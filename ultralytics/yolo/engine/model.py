@@ -3,8 +3,10 @@
 import sys
 from pathlib import Path
 
+from torch.nn import Module
+
 from ultralytics import yolo  # noqa
-from ultralytics.nn.tasks import (ClassificationModel, DetectionModel, SegmentationModel, attempt_load_one_weight,
+from ultralytics.nn.tasks import (ClassificationModel, CNSDetectionModel, DetectionModel, SegmentationModel, attempt_load_one_weight,
                                   guess_model_task, nn)
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.engine.exporter import Exporter
@@ -21,6 +23,9 @@ TASK_MAP = {
         yolo.v8.classify.ClassificationPredictor],
     'detect': [
         DetectionModel, yolo.v8.detect.DetectionTrainer, yolo.v8.detect.DetectionValidator,
+        yolo.v8.detect.DetectionPredictor],
+    'cns_detect': [
+        CNSDetectionModel, yolo.v8.detect.DetectionTrainer, yolo.v8.detect.DetectionValidator,
         yolo.v8.detect.DetectionPredictor],
     'segment': [
         SegmentationModel, yolo.v8.segment.SegmentationTrainer, yolo.v8.segment.SegmentationValidator,
@@ -67,13 +72,14 @@ class YOLO:
         list(ultralytics.yolo.engine.results.Results): The prediction results.
     """
 
-    def __init__(self, model='yolov8n.pt', task=None, session=None) -> None:
+    def __init__(self, model='yolov8n.pt', task=None, session=None, return_interim_layers=None) -> None:
         """
         Initializes the YOLO model.
 
         Args:
             model (str, Path): model to load or create
         """
+        self.return_interim_layers = return_interim_layers
         self._reset_callbacks()
         self.predictor = None  # reuse predictor
         self.model = None  # model object
@@ -131,9 +137,11 @@ class YOLO:
             task (str) or (None): model task
         """
         suffix = Path(weights).suffix
+        print(f'loading model with {task=}')
         if suffix == '.pt':
-            self.model, self.ckpt = attempt_load_one_weight(weights)
-            self.task = self.model.args['task']
+            self.model, self.ckpt = attempt_load_one_weight(weights, task=task, return_interim_layers=self.return_interim_layers)
+            self.task = task or self.model.args['task']
+            self.model.task = task or self.model.task
             self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
             self.ckpt_path = self.model.pt_path
         else:
@@ -141,6 +149,8 @@ class YOLO:
             self.model, self.ckpt = weights, None
             self.task = task or guess_model_task(weights)
             self.ckpt_path = weights
+        print(f'{self.task=}')
+        print(f'{self.model.task=}')
         self.overrides['model'] = weights
 
     def _check_is_pytorch_model(self):
@@ -173,7 +183,7 @@ class YOLO:
         """
         self._check_is_pytorch_model()
         if isinstance(weights, (str, Path)):
-            weights, self.ckpt = attempt_load_one_weight(weights)
+            weights, self.ckpt = attempt_load_one_weight(weights, task=self.task)
         self.model.load(weights)
         return self
 
@@ -377,3 +387,15 @@ class YOLO:
     def _reset_callbacks():
         for event in callbacks.default_callbacks.keys():
             callbacks.default_callbacks[event] = [callbacks.default_callbacks[event][0]]
+
+
+class CNS_YOLO(Module, YOLO):
+    """
+    Mixin of YOLO and torch.Module, so we can easily use this in PoET
+    """
+    def __init__(self, *args, model, task, return_interim_layers, **kwargs):
+        super(CNS_YOLO, self).__init__(*args, **kwargs)
+        self.backbone = YOLO(model=model, task=task, return_interim_layers=return_interim_layers)
+
+    def forward(self, x):
+        self.predict(source=x)
