@@ -143,12 +143,8 @@ class YOLO(Module):
         print(f'{self=}')
         print(f'{self.model=}')
         if suffix == '.pt':
-            print(f'{self.model=}')
             self.model, self.ckpt = attempt_load_one_weight(weights, task=task, return_interim_layers=self.return_interim_layers, opts=self.opts)
             self.task = task or self.model.args['task']
-            print('in _load()')
-            print(f'{dir(self)=}')
-            print(f'{self.model=}')
             self.model.task = task or self.model.task
             self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
             self.ckpt_path = self.model.pt_path
