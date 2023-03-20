@@ -7,6 +7,7 @@ from collections import OrderedDict
 
 import thop
 import torch
+from torchvision.models.feature_extraction import create_feature_extractor, get_graph_node_names
 import torch.nn as nn
 
 from ultralytics.nn.modules import (C1, C2, C3, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C2f, C3Ghost, C3x, Classify,
@@ -242,27 +243,25 @@ class DetectionModel(BaseModel):
 
 class CNSDetectionModel(DetectionModel):
     # YOLOv8 detection model, adapted for PoET
-    def __init__(self, return_interim_layers:bool = True, cfg='yolov8n.yaml', ch=3, nc=None, verbose=True):  # model, input channels, number of classes
+    def __init__(self, opts, return_interim_layers:bool = True, cfg='yolov8n.yaml', ch=3, nc=None, verbose=True):  # model, input channels, number of classes
         super().__init__(cfg, ch, nc, verbose)
         self.return_interim_layers = return_interim_layers
-        print(f'{self.return_interim_layers=}')
-        print(f'{self.model[-1]=}')
-        print(f'{dir(self.model[-1])=}')
 
         if self.return_interim_layers:
-            self.return_layers = {name: child for name, child in [*self.model[-1].named_children(), ('Detect', self.model[-1])]}       # inputs of detection layer, plus itself
-            self.num_channels = [self.model[layer][3] for layer in self.return_layers.values()]  # output channels of each layer
-            # FIXME this is almost certainly not correct, this value is 'repeats'
-            # But idk how to calculate the strides 
-            self.strides = [self.model[layer][1] for layer in self.return_layers.values()]       # stride of each layer
+            self.return_layers = {name: child for name, child in [*self.model.named_children()] if name in ['15', '18', '21', '22']}       # inputs of detection layer, plus itself
+            self.num_channels = [layer.m[0].cv2.conv.out_channels for name, layer in self.return_layers.items() if name != '22']  # output channels of each layer
+            self.num_channels.append(self.return_layers['22'].no)    # output channels of detect layer
+
+            self.strides = [layer.m[0].cv2.conv.stride for name, layer in self.return_layers.items() if name != '22']       # stride of each layer
+            self.strides.append(self.return_layers['22'].stride)
         else:
             self.return_layers = {"0": self.model[-1]}      # detection layer
             self.num_channels = self.model[-1][3]           # output channels of detction layer
             self.strides = self.model[-1].stride                      # stride of detection layer
 
-        self.conf_thres = args.backbone_conf_thresh
-        self.iou_thres = args.backbone_iou_thresh
-        self.agnostic_nms = args.backbone_agnostic_nms
+        self.conf_thres = opts.backbone_conf_thresh
+        self.iou_thres = opts.backbone_iou_thresh
+        self.agnostic_nms = opts.backbone_agnostic_nms
 
     def _forward_once(self, x, profile=False, visualize=False):
         """
@@ -276,7 +275,6 @@ class CNSDetectionModel(DetectionModel):
         Returns:
             (torch.Tensor): The last output of the model.
         """
-        print(f'{dir(self)=}')
         y, dt = [], []  # outputs
         intermediate = OrderedDict()
         intermediate_i = 0
@@ -496,18 +494,14 @@ def attempt_load_weights(weights, device=None, inplace=True, fuse=False):
     return ensemble
 
 
-def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False, task=None, return_interim_layers=None):
+def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False, task=None, return_interim_layers=None, opts=None):
     # Loads a single model weights
     ckpt, weight = torch_safe_load(weight)  # load ckpt
     args = {**DEFAULT_CFG_DICT, **ckpt['train_args']}  # combine model and default args, preferring model args
     args['task'] = task or args['task']
-    print(f'{args=}')
     model = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model
-    print(f'{model=}')
-    print(f'{type(model)=}')
-    print(f'{ckpt.keys()=}')
     if task == 'cns_detect':
-        model = CNSDetectionModel(return_interim_layers=return_interim_layers)
+        model = CNSDetectionModel(nc=22, opts=opts, return_interim_layers=return_interim_layers)
         model.load_state_dict(ckpt['model'].state_dict())
         model = model.to(device).float()
 

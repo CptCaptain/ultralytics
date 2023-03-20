@@ -32,7 +32,7 @@ TASK_MAP = {
         yolo.v8.segment.SegmentationPredictor]}
 
 
-class YOLO:
+class YOLO(Module):
     """
     YOLO (You Only Look Once) object detection model.
 
@@ -72,20 +72,22 @@ class YOLO:
         list(ultralytics.yolo.engine.results.Results): The prediction results.
     """
 
-    def __init__(self, model='yolov8n.pt', task=None, session=None, return_interim_layers=None) -> None:
+    def __init__(self, model='yolov8n.pt', task=None, session=None, return_interim_layers=None, opts=None) -> None:
         """
         Initializes the YOLO model.
 
         Args:
             model (str, Path): model to load or create
         """
+        super().__init__()
         self.return_interim_layers = return_interim_layers
+        self.opts = opts
         self._reset_callbacks()
         self.predictor = None  # reuse predictor
         self.model = None  # model object
         self.trainer = None  # trainer object
         self.task = None  # task type
-        self.ckpt = None  # if loaded from *.pt
+        self.ckpt = None  # if loaded from *.pg
         self.cfg = None  # if loaded from *.yaml
         self.ckpt_path = None
         self.overrides = {}  # overrides for trainer object
@@ -138,9 +140,15 @@ class YOLO:
         """
         suffix = Path(weights).suffix
         print(f'loading model with {task=}')
+        print(f'{self=}')
+        print(f'{self.model=}')
         if suffix == '.pt':
-            self.model, self.ckpt = attempt_load_one_weight(weights, task=task, return_interim_layers=self.return_interim_layers)
+            print(f'{self.model=}')
+            self.model, self.ckpt = attempt_load_one_weight(weights, task=task, return_interim_layers=self.return_interim_layers, opts=self.opts)
             self.task = task or self.model.args['task']
+            print('in _load()')
+            print(f'{dir(self)=}')
+            print(f'{self.model=}')
             self.model.task = task or self.model.task
             self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
             self.ckpt_path = self.model.pt_path
@@ -389,13 +397,14 @@ class YOLO:
             callbacks.default_callbacks[event] = [callbacks.default_callbacks[event][0]]
 
 
-class CNS_YOLO(Module, YOLO):
+# class CNS_YOLO(Module, YOLO):
+class CNS_YOLO(YOLO):
     """
     Mixin of YOLO and torch.Module, so we can easily use this in PoET
     """
-    def __init__(self, *args, model, task, return_interim_layers, **kwargs):
-        super(CNS_YOLO, self).__init__(*args, **kwargs)
-        self.backbone = YOLO(model=model, task=task, return_interim_layers=return_interim_layers)
+    def __init__(self, *args, opts, model, task, return_interim_layers, **kwargs):
+        super(CNS_YOLO, self).__init__(*args, opts=opts, model=model, task=task, return_interim_layers=return_interim_layers, **kwargs)
+        # self.backbone = YOLO(opts=opts, model=model, task=task, return_interim_layers=return_interim_layers)
 
     def forward(self, x):
         self.predict(source=x)
