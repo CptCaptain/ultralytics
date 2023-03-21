@@ -72,7 +72,7 @@ class YOLO(Module):
         list(ultralytics.yolo.engine.results.Results): The prediction results.
     """
 
-    def __init__(self, model='yolov8n.pt', task=None, session=None, return_interim_layers=None, opts=None) -> None:
+    def __init__(self, model='yolov8n.pt', task=None, session=None, return_interim_layers=True, opts=None) -> None:
         """
         Initializes the YOLO model.
 
@@ -106,9 +106,9 @@ class YOLO(Module):
     def __call__(self, source=None, stream=False, **kwargs):
         return self.predict(source, stream, **kwargs)
 
-    def __getattr__(self, attr):
-        name = self.__class__.__name__
-        raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
+    # def __getattr__(self, attr):
+        # name = self.__class__.__name__
+        # raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
 
     def _new(self, cfg: str, task=None, verbose=True):
         """
@@ -311,13 +311,15 @@ class YOLO(Module):
             args.batch = 1  # default to 1 if not modified
         return Exporter(overrides=args)(model=self.model)
 
-    def train(self, **kwargs):
+    def train(self, mode=None, **kwargs):
         """
         Trains the model on a given dataset.
 
         Args:
             **kwargs (Any): Any number of arguments representing the training configuration.
         """
+        if mode is not None:
+            return
         self._check_is_pytorch_model()
         check_pip_update_available()
         overrides = self.overrides.copy()
