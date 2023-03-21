@@ -188,7 +188,7 @@ class DetectionModel(BaseModel):
         if isinstance(m, (Detect, Segment)):
             s = 256  # 2x min stride
             m.inplace = self.inplace
-            forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
+            forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)[0]        # bit rough, might cause issues when using normal detect
             m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
             self.stride = m.stride
             m.bias_init()  # only run once
@@ -249,19 +249,20 @@ class CNSDetectionModel(DetectionModel):
 
         if self.return_interim_layers:
             self.return_layers = {name: child for name, child in [*self.model.named_children()] if name in ['15', '18', '21', '22']}       # inputs of detection layer, plus itself
-            self.num_channels = [layer.m[0].cv2.conv.out_channels for name, layer in self.return_layers.items() if name != '22']  # output channels of each layer
+            self.num_channels = [layer.no for name, layer in self.return_layers.items() if name != '22']  # output channels of each layer
             self.num_channels.append(self.return_layers['22'].no)    # output channels of detect layer
 
-            self.strides = [layer.m[0].cv2.conv.stride for name, layer in self.return_layers.items() if name != '22']       # stride of each layer
+            self.strides = [layer.cv2.conv.stride for name, layer in self.return_layers.items() if name != '22']       # stride of each layer
             self.strides.append(self.return_layers['22'].stride)
         else:
             self.return_layers = {"0": self.model[-1]}      # detection layer
-            self.num_channels = self.model[-1][3]           # output channels of detction layer
+            self.num_channels = self.model[-1].no           # output channels of detction layer
             self.strides = self.model[-1].stride                      # stride of detection layer
 
-        self.conf_thres = opts.backbone_conf_thresh
-        self.iou_thres = opts.backbone_iou_thresh
-        self.agnostic_nms = opts.backbone_agnostic_nms
+        if opts is not None:
+            self.conf_thres = opts.backbone_conf_thresh or 0.5
+            self.iou_thres = opts.backbone_iou_thresh or 0.5
+            self.agnostic_nms = opts.backbone_agnostic_nms or False
 
     def _forward_once(self, x, profile=False, visualize=False):
         """
@@ -292,12 +293,10 @@ class CNSDetectionModel(DetectionModel):
                 if m in self.return_layers.values():
                     intermediate[str(intermediate_i)] = x
                     intermediate_i += 1
-            except:
+            except Exception as e:
+                print(f'{e=}')
                 print('Return Layers not found!\nThis is not an error if we\'re still in the super().__init__')
-
-        if len(intermediate) == 0:
-            return x
-        return x, intermediate 
+        return (x, intermediate)
 
 
     def forward(self, x, augment=False, profile=False, visualize=False):
