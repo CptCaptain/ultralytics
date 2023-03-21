@@ -152,8 +152,14 @@ def check_source(source):
         from_img = True
     elif isinstance(source, torch.Tensor):
         tensor = True
+    elif type(source).__name__ == 'NestedTensor':
+        source, mask = source.decompose()
+        if torch.max(source) <=1.:
+            # source needs to be 0..255
+            source *= 255       
+        tensor = True
     else:
-        raise TypeError('Unsupported image type. For supported types see https://docs.ultralytics.com/modes/predict')
+        raise TypeError(f'Unsupported image type {type(source)=}. For supported types see https://docs.ultralytics.com/modes/predict')
 
     return source, webcam, screenshot, from_img, in_memory, tensor
 
