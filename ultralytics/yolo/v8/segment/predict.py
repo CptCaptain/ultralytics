@@ -4,7 +4,7 @@ import torch
 
 from ultralytics.yolo.engine.results import Results
 from ultralytics.yolo.utils import DEFAULT_CFG, ROOT, ops
-from ultralytics.yolo.utils.plotting import colors, save_one_box
+from ultralytics.yolo.utils.plotting import save_one_box
 from ultralytics.yolo.v8.detect.predict import DetectionPredictor
 
 
@@ -56,7 +56,6 @@ class SegmentationPredictor(DetectionPredictor):
         self.data_path = p
         self.txt_path = str(self.save_dir / 'labels' / p.stem) + ('' if self.dataset.mode == 'image' else f'_{frame}')
         log_string += '%gx%g ' % im.shape[2:]  # print string
-        self.annotator = self.get_annotator(im0)
 
         result = results[idx]
         if len(result) == 0:
@@ -72,21 +71,16 @@ class SegmentationPredictor(DetectionPredictor):
         if self.args.save or self.args.show:
             im_gpu = torch.as_tensor(im0, dtype=torch.float16, device=mask.masks.device).permute(
                 2, 0, 1).flip(0).contiguous() / 255 if self.args.retina_masks else im[idx]
-            self.annotator.masks(masks=mask.masks, colors=[colors(x, True) for x in det.cls], im_gpu=im_gpu)
+            self.plotted_img = result.plot(line_width=self.args.line_thickness, im_gpu=im_gpu, boxes=self.args.boxes)
 
         # Write results
         for j, d in enumerate(reversed(det)):
-            cls, conf, id = d.cls.squeeze(), d.conf.squeeze(), None if d.id is None else int(d.id.item())
+            c, conf, id = int(d.cls), float(d.conf), None if d.id is None else int(d.id.item())
             if self.args.save_txt:  # Write to file
-                seg = mask.segments[len(det) - j - 1].copy().reshape(-1)  # reversed mask.segments, (n,2) to (n*2)
-                line = (cls, *seg) + (conf, ) * self.args.save_conf + (() if id is None else (id, ))
+                seg = mask.xyn[len(det) - j - 1].copy().reshape(-1)  # reversed mask.xyn, (n,2) to (n*2)
+                line = (c, *seg) + (conf, ) * self.args.save_conf + (() if id is None else (id, ))
                 with open(f'{self.txt_path}.txt', 'a') as f:
                     f.write(('%g ' * len(line)).rstrip() % line + '\n')
-            if self.args.save or self.args.save_crop or self.args.show:  # Add bbox to image
-                c = int(cls)  # integer class
-                name = ('' if id is None else f'id:{id} ') + self.model.names[c]
-                label = None if self.args.hide_labels else (name if self.args.hide_conf else f'{name} {conf:.2f}')
-                self.annotator.box_label(d.xyxy.squeeze(), label, color=colors(c, True)) if self.args.boxes else None
             if self.args.save_crop:
                 save_one_box(d.xyxy,
                              imc,
