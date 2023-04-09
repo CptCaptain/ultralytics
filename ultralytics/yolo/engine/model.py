@@ -74,11 +74,7 @@ class YOLO(Module):
         list(ultralytics.yolo.engine.results.Results): The prediction results.
     """
 
-<<<<<<< HEAD
     def __init__(self, model='yolov8n.pt', task=None, session=None, return_interim_layers=True, opts=None) -> None:
-=======
-    def __init__(self, model: Union[str, Path] = 'yolov8n.pt', task=None) -> None:
->>>>>>> 48f1d269fb26ed135e7b3319f74483937d245c15
         """
         Initializes the YOLO model.
 
@@ -87,14 +83,11 @@ class YOLO(Module):
             task (Any, optional): Task type for the YOLO model. Defaults to None.
 
         """
-<<<<<<< HEAD
         super().__init__()
         self.return_interim_layers = return_interim_layers
         self.opts = opts
         self._reset_callbacks()
-=======
         self.callbacks = callbacks.get_default_callbacks()
->>>>>>> 48f1d269fb26ed135e7b3319f74483937d245c15
         self.predictor = None  # reuse predictor
         self.model = None  # model object
         self.trainer = None  # trainer object
@@ -438,7 +431,6 @@ class YOLO(Module):
 
     def _reset_callbacks(self):
         for event in callbacks.default_callbacks.keys():
-<<<<<<< HEAD
             callbacks.default_callbacks[event] = [callbacks.default_callbacks[event][0]]
 
 
@@ -453,6 +445,3 @@ class CNS_YOLO(YOLO):
 
     def forward(self, x):
         self.predict(source=x)
-=======
-            self.callbacks[event] = [callbacks.default_callbacks[event][0]]
->>>>>>> 48f1d269fb26ed135e7b3319f74483937d245c15

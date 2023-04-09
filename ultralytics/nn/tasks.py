@@ -188,11 +188,7 @@ class DetectionModel(BaseModel):
         if isinstance(m, (Detect, Segment, Pose)):
             s = 256  # 2x min stride
             m.inplace = self.inplace
-<<<<<<< HEAD
-            forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)[0]        # bit rough, might cause issues when using normal detect
-=======
-            forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose)) else self.forward(x)
->>>>>>> 48f1d269fb26ed135e7b3319f74483937d245c15
+            forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose)) else self.forward(x)[0]
             m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
             self.stride = m.stride
             m.bias_init()  # only run once

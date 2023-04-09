@@ -316,6 +316,8 @@ class BaseTrainer:
                 with torch.cuda.amp.autocast(self.amp):
                     batch = self.preprocess_batch(batch)
                     preds = self.model(batch['img'])
+                    print(f"{len(preds)=}")
+                    print(f"{preds[0].shape=}")
                     self.loss, self.loss_items = self.criterion(preds, batch)
                     if RANK != -1:
                         self.loss *= world_size
