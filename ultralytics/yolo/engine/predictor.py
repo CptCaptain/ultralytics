@@ -3,16 +3,16 @@
 Run prediction on images, videos, directories, globs, YouTube, webcam, streams, etc.
 
 Usage - sources:
-    $ yolo mode=predict model=yolov8n.pt --source 0                               # webcam
-                                                  img.jpg                         # image
-                                                  vid.mp4                         # video
-                                                  screen                          # screenshot
-                                                  path/                           # directory
-                                                  list.txt                        # list of images
-                                                  list.streams                    # list of streams
-                                                  'path/*.jpg'                    # glob
-                                                  'https://youtu.be/Zgi9g1ksQHc'  # YouTube
-                                                  'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP stream
+    $ yolo mode=predict model=yolov8n.pt source=0                               # webcam
+                                                img.jpg                         # image
+                                                vid.mp4                         # video
+                                                screen                          # screenshot
+                                                path/                           # directory
+                                                list.txt                        # list of images
+                                                list.streams                    # list of streams
+                                                'path/*.jpg'                    # glob
+                                                'https://youtu.be/Zgi9g1ksQHc'  # YouTube
+                                                'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP stream
 
 Usage - formats:
     $ yolo mode=predict model=yolov8n.pt                 # PyTorch
@@ -28,7 +28,6 @@ Usage - formats:
                               yolov8n_paddle_model       # PaddlePaddle
 """
 import platform
-from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -41,6 +40,18 @@ from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, SETTINGS, callbacks, col
 from ultralytics.yolo.utils.checks import check_imgsz, check_imshow
 from ultralytics.yolo.utils.files import increment_path
 from ultralytics.yolo.utils.torch_utils import select_device, smart_inference_mode
+
+STREAM_WARNING = """
+    WARNING ⚠️ stream/video/webcam/dir predict source will accumulate results in RAM unless `stream=True` is passed,
+    causing potential out-of-memory errors for large sources or long-running streams/videos.
+
+    Usage:
+        results = model(source=..., stream=True)  # generator of Results objects
+        for r in results:
+            boxes = r.boxes  # Boxes object for bbox outputs
+            masks = r.masks  # Masks object for segment masks outputs
+            probs = r.probs  # Class probabilities for classification outputs
+"""
 
 
 class BasePredictor:
@@ -63,7 +74,7 @@ class BasePredictor:
         data_path (str): Path to data.
     """
 
-    def __init__(self, cfg=DEFAULT_CFG, overrides=None):
+    def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
         """
         Initializes the BasePredictor class.
 
@@ -88,18 +99,15 @@ class BasePredictor:
         self.device = None
         self.dataset = None
         self.vid_path, self.vid_writer = None, None
-        self.annotator = None
+        self.plotted_img = None
         self.data_path = None
         self.source_type = None
         self.batch = None
-        self.callbacks = defaultdict(list, callbacks.default_callbacks)  # add callbacks
+        self.callbacks = _callbacks or callbacks.get_default_callbacks()
         callbacks.add_integration_callbacks(self)
 
     def preprocess(self, img):
         pass
-
-    def get_annotator(self, img):
-        raise NotImplementedError('get_annotator function needs to be implemented')
 
     def write_results(self, results, batch, print_string):
         raise NotImplementedError('print_results function needs to be implemented')
@@ -108,6 +116,7 @@ class BasePredictor:
         return preds
 
     def __call__(self, source=None, model=None, stream=False):
+        self.stream = stream
         if stream:
             results = self.stream_inference(source, model)
             return results
@@ -137,6 +146,10 @@ class BasePredictor:
                                              stride=self.model.stride,
                                              auto=self.model.pt)
         self.source_type = self.dataset.source_type
+        if not getattr(self, 'stream', True) and (self.dataset.mode == 'stream' or  # streams
+                                                  len(self.dataset) > 1000 or  # images
+                                                  any(getattr(self.dataset, 'video_flag', [False]))):  # videos
+            LOGGER.warning(STREAM_WARNING)
         self.vid_path, self.vid_writer = [None] * self.dataset.bs, [None] * self.dataset.bs
 
     @smart_inference_mode()
@@ -199,10 +212,10 @@ class BasePredictor:
                 if self.args.verbose or self.args.save or self.args.save_txt or self.args.show:
                     s += self.write_results(i, self.results, (p, im, im0))
 
-                if self.args.show:
+                if self.args.show and self.plotted_img is not None:
                     self.show(p)
 
-                if self.args.save:
+                if self.args.save and self.plotted_img is not None:
                     self.save_preds(vid_cap, i, str(self.save_dir / p.name))
             self.run_callbacks('on_predict_batch_end')
             yield self.results, preds, intermediates
@@ -239,12 +252,13 @@ class BasePredictor:
                                  dnn=self.args.dnn,
                                  data=self.args.data,
                                  fp16=self.args.half,
+                                 fuse=True,
                                  verbose=verbose)
         self.device = device
         self.model.eval()
 
     def show(self, p):
-        im0 = self.annotator.result()
+        im0 = self.plotted_img
         if platform.system() == 'Linux' and p not in self.windows:
             self.windows.append(p)
             cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
@@ -253,7 +267,7 @@ class BasePredictor:
         cv2.waitKey(5000 if self.batch[4].startswith('image') else 10000)  # 1 millisecond
 
     def save_preds(self, vid_cap, idx, save_path):
-        im0 = self.annotator.result()
+        im0 = self.plotted_img
         # save imgs
         if self.dataset.mode == 'image':
             cv2.imwrite(save_path, im0)
@@ -275,3 +289,9 @@ class BasePredictor:
     def run_callbacks(self, event: str):
         for callback in self.callbacks.get(event, []):
             callback(self)
+
+    def add_callback(self, event: str, func):
+        """
+        Add callback
+        """
+        self.callbacks[event].append(func)
