@@ -4,8 +4,10 @@ import sys
 from pathlib import Path
 from typing import Union
 
+from torch.nn import Module
+
 from ultralytics import yolo  # noqa
-from ultralytics.nn.tasks import (ClassificationModel, DetectionModel, PoseModel, SegmentationModel,
+from ultralytics.nn.tasks import (ClassificationModel, CNSDetectionModel, DetectionModel, PoseModel, SegmentationModel, 
                                   attempt_load_one_weight, guess_model_task, nn, yaml_model_load)
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.engine.exporter import Exporter
@@ -23,13 +25,16 @@ TASK_MAP = {
     'detect': [
         DetectionModel, yolo.v8.detect.DetectionTrainer, yolo.v8.detect.DetectionValidator,
         yolo.v8.detect.DetectionPredictor],
+    'cns_detect': [
+        CNSDetectionModel, yolo.v8.detect.DetectionTrainer, yolo.v8.detect.DetectionValidator,
+        yolo.v8.detect.DetectionPredictor],
     'segment': [
         SegmentationModel, yolo.v8.segment.SegmentationTrainer, yolo.v8.segment.SegmentationValidator,
         yolo.v8.segment.SegmentationPredictor],
     'pose': [PoseModel, yolo.v8.pose.PoseTrainer, yolo.v8.pose.PoseValidator, yolo.v8.pose.PosePredictor]}
 
 
-class YOLO:
+class YOLO(Module):
     """
     YOLO (You Only Look Once) object detection model.
 
@@ -69,7 +74,7 @@ class YOLO:
         list(ultralytics.yolo.engine.results.Results): The prediction results.
     """
 
-    def __init__(self, model: Union[str, Path] = 'yolov8n.pt', task=None) -> None:
+    def __init__(self, model='yolov8n.pt', task=None, session=None, return_interim_layers=True, opts=None) -> None:
         """
         Initializes the YOLO model.
 
@@ -78,12 +83,16 @@ class YOLO:
             task (Any, optional): Task type for the YOLO model. Defaults to None.
 
         """
+        super().__init__()
+        self.return_interim_layers = return_interim_layers
+        self.opts = opts
+        self._reset_callbacks()
         self.callbacks = callbacks.get_default_callbacks()
         self.predictor = None  # reuse predictor
         self.model = None  # model object
         self.trainer = None  # trainer object
         self.task = None  # task type
-        self.ckpt = None  # if loaded from *.pt
+        self.ckpt = None  # if loaded from *.pg
         self.cfg = None  # if loaded from *.yaml
         self.ckpt_path = None
         self.overrides = {}  # overrides for trainer object
@@ -109,9 +118,9 @@ class YOLO:
     def __call__(self, source=None, stream=False, **kwargs):
         return self.predict(source, stream, **kwargs)
 
-    def __getattr__(self, attr):
-        name = self.__class__.__name__
-        raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
+    # def __getattr__(self, attr):
+        # name = self.__class__.__name__
+        # raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
 
     @staticmethod
     def is_hub_model(model):
@@ -149,9 +158,13 @@ class YOLO:
             task (str) or (None): model task
         """
         suffix = Path(weights).suffix
+        print(f'loading model with {task=}')
+        print(f'{self=}')
+        print(f'{self.model=}')
         if suffix == '.pt':
-            self.model, self.ckpt = attempt_load_one_weight(weights)
-            self.task = self.model.args['task']
+            self.model, self.ckpt = attempt_load_one_weight(weights, task=task, return_interim_layers=self.return_interim_layers, opts=self.opts)
+            self.task = task or self.model.args['task']
+            self.model.task = task or self.model.task
             self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
             self.ckpt_path = self.model.pt_path
         else:
@@ -159,6 +172,8 @@ class YOLO:
             self.model, self.ckpt = weights, None
             self.task = task or guess_model_task(weights)
             self.ckpt_path = weights
+        print(f'{self.task=}')
+        print(f'{self.model.task=}')
         self.overrides['model'] = weights
         self.overrides['task'] = self.task
 
@@ -192,7 +207,7 @@ class YOLO:
         """
         self._check_is_pytorch_model()
         if isinstance(weights, (str, Path)):
-            weights, self.ckpt = attempt_load_one_weight(weights)
+            weights, self.ckpt = attempt_load_one_weight(weights, task=self.task)
         self.model.load(weights)
         return self
 
@@ -332,13 +347,15 @@ class YOLO:
             args.batch = 1  # default to 1 if not modified
         return Exporter(overrides=args, _callbacks=self.callbacks)(model=self.model)
 
-    def train(self, **kwargs):
+    def train(self, mode=None, **kwargs):
         """
         Trains the model on a given dataset.
 
         Args:
             **kwargs (Any): Any number of arguments representing the training configuration.
         """
+        if mode is not None:
+            return
         self._check_is_pytorch_model()
         if self.session:  # Ultralytics HUB session
             if any(kwargs):
@@ -414,4 +431,17 @@ class YOLO:
 
     def _reset_callbacks(self):
         for event in callbacks.default_callbacks.keys():
-            self.callbacks[event] = [callbacks.default_callbacks[event][0]]
+            callbacks.default_callbacks[event] = [callbacks.default_callbacks[event][0]]
+
+
+# class CNS_YOLO(Module, YOLO):
+class CNS_YOLO(YOLO):
+    """
+    Mixin of YOLO and torch.Module, so we can easily use this in PoET
+    """
+    def __init__(self, *args, opts, model, task, return_interim_layers, **kwargs):
+        super(CNS_YOLO, self).__init__(*args, opts=opts, model=model, task=task, return_interim_layers=return_interim_layers, **kwargs)
+        # self.backbone = YOLO(opts=opts, model=model, task=task, return_interim_layers=return_interim_layers)
+
+    def forward(self, x):
+        self.predict(source=x)

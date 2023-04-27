@@ -162,7 +162,7 @@ class BaseTrainer:
         for callback in self.callbacks.get(event, []):
             callback(self)
 
-    def train(self):
+    def train(self, mode=None):
         # Allow device='', device=None on Multi-GPU systems to default to device=0
         if isinstance(self.args.device, int) or self.args.device:  # i.e. device=0 or device=[0,1,2,3]
             world_size = torch.cuda.device_count()

@@ -118,9 +118,14 @@ class BasePredictor:
     def __call__(self, source=None, model=None, stream=False):
         self.stream = stream
         if stream:
-            return self.stream_inference(source, model)
+            results = self.stream_inference(source, model)
+            return results
         else:
-            return list(self.stream_inference(source, model))  # merge list of Result into one
+            results = self.stream_inference(source, model)
+            results = list(results)  # merge list of Result into one
+            if len(results[0]) == 3:
+                results, preds, intermediates = results[0]
+            return results, preds, intermediates
 
     def predict_cli(self, source=None, model=None):
         # Method used for CLI prediction. It uses always generator as outputs as not required by CLI mode
@@ -149,6 +154,7 @@ class BasePredictor:
 
     @smart_inference_mode()
     def stream_inference(self, source=None, model=None):
+        intermediates = None
         if self.args.verbose:
             LOGGER.info('')
 
@@ -186,7 +192,8 @@ class BasePredictor:
 
             # postprocess
             with self.dt[2]:
-                self.results = self.postprocess(preds, im, im0s)
+                # self.results, self.intermediates = self.postprocess(preds, im, im0s)
+                self.results, preds, intermediates = self.postprocess(preds, im, im0s)
             self.run_callbacks('on_predict_postprocess_end')
 
             # visualize, save, write results
@@ -211,10 +218,13 @@ class BasePredictor:
                 if self.args.save and self.plotted_img is not None:
                     self.save_preds(vid_cap, i, str(self.save_dir / p.name))
             self.run_callbacks('on_predict_batch_end')
-            yield from self.results
+            yield self.results, preds, intermediates
+            # else:
+                # yield from self.results
+                # yield preds
 
             # Print time (inference-only)
-            if self.args.verbose:
+            if self.args.verbose and intermediates is None:
                 LOGGER.info(f'{s}{self.dt[1].dt * 1E3:.1f}ms')
 
         # Release assets
@@ -254,7 +264,7 @@ class BasePredictor:
             cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
             cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
         cv2.imshow(str(p), im0)
-        cv2.waitKey(500 if self.batch[4].startswith('image') else 1)  # 1 millisecond
+        cv2.waitKey(5000 if self.batch[4].startswith('image') else 10000)  # 1 millisecond
 
     def save_preds(self, vid_cap, idx, save_path):
         im0 = self.plotted_img

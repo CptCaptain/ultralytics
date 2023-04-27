@@ -14,7 +14,7 @@ from ultralytics.yolo.utils import (DEFAULT_CFG, DEFAULT_CFG_DICT, DEFAULT_CFG_P
 
 # Define valid tasks and modes
 MODES = 'train', 'val', 'predict', 'export', 'track', 'benchmark'
-TASKS = 'detect', 'segment', 'classify', 'pose'
+TASKS = 'detect', 'cns_detect', 'segment', 'classify', 'pose'
 TASK2DATA = {
     'detect': 'coco128.yaml',
     'segment': 'coco128-seg.yaml',
@@ -22,6 +22,7 @@ TASK2DATA = {
     'pose': 'coco8-pose.yaml'}
 TASK2MODEL = {
     'detect': 'yolov8n.pt',
+    'cns_detect': 'yolov8n.pt',
     'segment': 'yolov8n-seg.pt',
     'classify': 'yolov8n-cls.pt',
     'pose': 'yolov8n-pose.yaml'}

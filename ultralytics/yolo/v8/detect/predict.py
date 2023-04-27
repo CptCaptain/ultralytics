@@ -1,5 +1,6 @@
 # Ultralytics YOLO 🚀, GPL-3.0 license
 
+from typing import List, Tuple
 import torch
 
 from ultralytics.yolo.engine.predictor import BasePredictor
@@ -17,6 +18,18 @@ class DetectionPredictor(BasePredictor):
         return img
 
     def postprocess(self, preds, img, orig_imgs):
+        features = None
+        if len(preds) == 2:
+            features = preds[1]
+            preds = preds[0]
+
+        try:
+            self.args.conf = self.model.conf_thres
+            self.args.iou = self.model.iou_thres
+            self.args.agnostic_nms = self.model.agnostic_nms
+        except:
+            pass
+
         preds = ops.non_max_suppression(preds,
                                         self.args.conf,
                                         self.args.iou,
@@ -32,6 +45,8 @@ class DetectionPredictor(BasePredictor):
             path, _, _, _, _ = self.batch
             img_path = path[i] if isinstance(path, list) else path
             results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred))
+        if features is not None:
+            return results, preds, features
         return results
 
     def write_results(self, idx, results, batch):
